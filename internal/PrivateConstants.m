@@ -40,7 +40,7 @@ params.TRAINING.EXTRA_TESTING_DATA_FOLDERS = { ...
 
 % If true, causes visualization to dump extensive output, which is useful for
 % formatting figures for papers, etc.
-params.TRAINING.DUMP_EXHAUSTIVE_VISUALIZATION = false;
+params.TRAINING.DUMP_EXHAUSTIVE_VISUALIZATION = true;
 
 % If true, pre-compute training data from the Gehler Shi dataset for use in
 % training this project. For some projects this data is not needed, and so this
