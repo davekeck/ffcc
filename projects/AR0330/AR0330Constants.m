@@ -48,7 +48,7 @@ params.SENSOR.STATS_SIZE = [256, 384];
 params.SENSOR.STATS_BIT_DEPTH = 16;
 % Setting the CCM to nan will cause the importing code to use whatever
 % input CCM is correct.
-params.SENSOR.CCM = nan;
+params.SENSOR.CCM = eye(3);
 % If true, assume that the input stats are linear intensity. Otherwise, assume
 % that the input stats are in gamma-corrected sRGB space.
 params.SENSOR.LINEAR_STATS = true;
