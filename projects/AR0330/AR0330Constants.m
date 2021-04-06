@@ -35,14 +35,14 @@ params.HISTOGRAM.BIN_SIZE = 1/32;
 % The UV coordinate of the first bin in the histogram. Here it's set such
 % that the center of the histogram roughly corresponds to a gain of [2, 1, 2],
 % which is standard for cameras where green is gained up by 2x.
-params.HISTOGRAM.STARTING_UV = -0.34375;
+params.HISTOGRAM.STARTING_UV = -0.531250;
 % Whether or not to ignore zero-valued pixels when constructing histograms
 % from training data. This is a good idea if the training data contains
 % color charts or saturated pixels which have been masked out.
 params.HISTOGRAM.MASK_ZERO_PIXELS = true;
 
 % The expected resolution of the sensor stats.
-params.SENSOR.STATS_SIZE = [256, 384];
+params.SENSOR.STATS_SIZE = [256, 455];
 % The expected bit depth of the feature stats, 12 bit 2.7mp images downsampled
 % to 0.1mp images should give at least 4 extra bits of precision.
 params.SENSOR.STATS_BIT_DEPTH = 16;
