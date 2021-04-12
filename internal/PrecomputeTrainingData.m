@@ -95,6 +95,7 @@ else
       % Read the hardware statistics or sensor-space image, which is
       % assumed to be linear.
       I_linear = imread(image_filename);
+      I_linear = double(I_linear) ./ 65535;
 
       % The user can choose to ignore pixels with zeros in any channel (useful
       % for training on images with masked color charts or saturated pixels).
