@@ -95,6 +95,11 @@ else
       % Read the hardware statistics or sensor-space image, which is
       % assumed to be linear.
       I_linear = imread(image_filename);
+      
+      % Convert the image to [0,1] doubles
+      % For now, only support 16-bit source images
+      assert(isa(I_linear, 'uint16'));
+      I_linear = double(I_linear) ./ 65535;
 
       % The user can choose to ignore pixels with zeros in any channel (useful
       % for training on images with masked color charts or saturated pixels).
@@ -178,7 +183,8 @@ else
       'filename', image_filename, ...
       'original_filename', original_filename, ...
       'feature_time', feature_time, ...
-      'avg_rgb', avg_rgb);
+      'avg_rgb', avg_rgb, ...
+      'gt_rgb', L);
 
     if i_file > 1
       assert(length(data{i_file}.feature_vec) ...
