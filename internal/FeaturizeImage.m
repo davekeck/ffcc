@@ -22,8 +22,6 @@ if isempty(mask)
 end
 
 im_channels = ChannelizeImage(im, mask);
-im_channels1 = im_channels{1};
-im_channels2 = im_channels{2};
 
 if isa(im, 'float')
   assert(all(im(:) <= 1));
@@ -31,7 +29,6 @@ if isa(im, 'float')
 end
 
 X = {};
-X_unnorm = {};
 for i_channel = 1:length(im_channels)
 
   im_channel = im_channels{i_channel};
@@ -62,17 +59,10 @@ for i_channel = 1:length(im_channels)
     params.HISTOGRAM.STARTING_UV, params.HISTOGRAM.BIN_SIZE, ...
     params.HISTOGRAM.NUM_BINS);
 
-  X_unnorm{end+1} = Xc;
   Xc = Xc / max(eps, sum(Xc(:)));
 
   X{end+1} = Xc;
 end
-
-X1 = X{1};
-X2 = X{2};
-
-X1_unnorm = X_unnorm{1};
-X2_unnorm = X_unnorm{2};
 
 X = cat(3, X{:});
 

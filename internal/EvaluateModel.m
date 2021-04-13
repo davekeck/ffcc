@@ -61,7 +61,7 @@ if isempty(B)
   B = zeros(size(X_fft,1), size(X_fft,2));
 end
 
-% compute_gradient = (nargout >= 2);
+compute_gradient = (nargout >= 2);
 
 % The filtered histogram H = sum(conv(F, X),3) + B. The convolution is
 % performed with FFTs with the sum over channels performed in FFT-space so that
@@ -72,247 +72,247 @@ FX = real(ifft2(FX_fft));
 H = FX + B;
 
 % Turn the score histogram into a PDF by passing it through a softmax.
-% if compute_gradient
-%   [P, P_meta] = SoftmaxForward(H);
-% else
+if compute_gradient
+  [P, P_meta] = SoftmaxForward(H);
+else
   P = SoftmaxForward(H);
-% end
+end
 
 % Fit a bivariate Von Mises distribution to the PDF to get an estimate of the
 % center of mass of the PDF, as well as a covariance matrix, and the partial
 % derivative of the mean and covariance matrix.
-% if compute_gradient
-%   [mu_idx, Sigma_idx, dmu_idx_P, dSigma_idx_P] = FitBivariateVonMises(P);
-% else
+if compute_gradient
+  [mu_idx, Sigma_idx, dmu_idx_P, dSigma_idx_P] = FitBivariateVonMises(P);
+else
   [mu_idx, Sigma_idx] = FitBivariateVonMises(P);
-% end
+end
 
-% if params.TRAINING.FORCE_ISOTROPIC_VON_MISES
-%   % Whiten a convariance matrix while preserving its trace.
-%   Sigma_idx = eye(2) * mean(diag(Sigma_idx));
-%   % Note that the gradients dSigma_idx_P are now incorrect. This is
-%   % rectified later during backpropagation.
-% end
+if params.TRAINING.FORCE_ISOTROPIC_VON_MISES
+  % Whiten a convariance matrix while preserving its trace.
+  Sigma_idx = eye(2) * mean(diag(Sigma_idx));
+  % Note that the gradients dSigma_idx_P are now incorrect. This is
+  % rectified later during backpropagation.
+end
 
-% if strcmp(params.HISTOGRAM.VON_MISES_DIAGONAL_MODE, 'clamp');
-%   assert(params.TRAINING.FORCE_ISOTROPIC_VON_MISES);
-%   % Clamp the diagonal of the variance to be at least EPS. This is only
-%   % supported for diagonal von Mises distributions.
-%   if (Sigma_idx(1) <= params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS)
-%     Sigma_idx = eye(2) * params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS;
-%     sigma_clamped = true;
-%   else
-%     sigma_clamped = false;
-%   end
-% elseif strcmp(params.HISTOGRAM.VON_MISES_DIAGONAL_MODE, 'pad');
+if strcmp(params.HISTOGRAM.VON_MISES_DIAGONAL_MODE, 'clamp');
+  assert(params.TRAINING.FORCE_ISOTROPIC_VON_MISES);
+  % Clamp the diagonal of the variance to be at least EPS. This is only
+  % supported for diagonal von Mises distributions.
+  if (Sigma_idx(1) <= params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS)
+    Sigma_idx = eye(2) * params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS;
+    sigma_clamped = true;
+  else
+    sigma_clamped = false;
+  end
+elseif strcmp(params.HISTOGRAM.VON_MISES_DIAGONAL_MODE, 'pad');
   % Add a constant to the diagonal of fitted Von Mises distributions to help
   % generalization. The constant should be at least 1/12 (the variance of a
   % unit-size box) but larger values regularize the Von Mises to be wider, which
   % appears to help.
   Sigma_idx = Sigma_idx + params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS * eye(2);
-% else
-%   assert(0)
-% end
+else
+  assert(0)
+end
 
 [state_obs.mu, state_obs.Sigma] = IdxToUv(mu_idx, Sigma_idx, params);
 
-% if params.DEBUG.GRAY_WORLD_UNWRAPPING
-%   avg_uv = RgbToUv(avg_rgb);
-%   deltas = state_obs.mu - avg_uv;
-%   width = params.HISTOGRAM.NUM_BINS * params.HISTOGRAM.BIN_SIZE;
-%   state_obs.mu = state_obs.mu - width * round(deltas / width);
-% end
-% 
-% if compute_gradient
-%   dmu_P = cellfun(@(x) x * params.HISTOGRAM.BIN_SIZE, dmu_idx_P, ...
-%     'UniformOutput', false);
-%   dSigma_P = cellfun(@(x) x * params.HISTOGRAM.BIN_SIZE.^2, dSigma_idx_P, ...
-%     'UniformOutput', false);
-% end
-% 
-% if strcmp(params.HISTOGRAM.VON_MISES_DIAGONAL_MODE, 'clamp');
-%   % If the gradient has been clamped, then the derivative with respect to Sigma
-%   % should be set to zero.
-%   if (sigma_clamped)
-%     dSigma_P{1} = 0;
-%     dSigma_P{2} = 0;
-%     dSigma_P{3} = 0;
-%   end
-% end
-% 
-% meta.P = P;
-% 
-% % The entropy of the Von Mises PDF.
-% meta.entropy = 0.5 * log(det(state_obs.Sigma));
-% 
-% % Because Sigma has a scaled identity matrix added to it, we can derive a lower
-% % bound on entropy.
-% meta.minimum_entropy = ...
-%       0.5 * log(det(params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS ...
-%       * (params.HISTOGRAM.BIN_SIZE.^2) * eye(2)));
-% 
-% % This is a reasonable "confidence" measurement, in that it is a value in (0, 1]
-% % where a large value means that the model predicted a very tightly localized
-% % white point. Equivalent to:
-% %   confidence = exp(-entropy) / exp(-minimum_entropy).
-% meta.entropy_confidence = exp(meta.minimum_entropy - meta.entropy);
-% 
-% sub_loss = struct();
-% sub_losses = struct();
-% if isfield(params, 'loss_mult')
-%   sub_loss.loss = 0;
-%   d_loss_H = 0;
-% end
-% 
-% if ~isempty(Y)
-%   % Here we compute two losses: a convex loss (cross-entropy on a discrete label
-%   % set, useful for pre-training) and a non-convex loss that produces higher
-%   % quality results when/if a good minimum is found (Von Mises log-likelihood,
-%   % useful for fine-tuning).
-% 
-%   % This convex loss is just logistic regression between P and a ground-truth
-%   % PDF indicating the location of the white point.
-% 
-%   if params.TRAINING.SMOOTH_CROSS_ENTROPY
-%     % Construct a one-hot vector from the ground truth.
-%     Y_idx = UvToIdx(Y, params);
-%     P_true = sparse(Y_idx(1), Y_idx(2), true, size(H,1), size(H,2));
-%   else
-%     % Construct a PDF from the ground truth.
-%     P_true = UvToP(Y, params);
-%   end
-% 
-%   % Compute cross-entropy (aka log-loss) and its gradient.
-%   log_P = P_meta.H_shifted - log(P_meta.expH_sum);
-%   sub_losses.crossent = -full(sum(P_true(:) .* log_P(:)));
-%   d_crossent_H = P - P_true;
-% 
-%   assert(sub_losses.crossent >= -1e-4);
-%   sub_losses.crossent = max(0, sub_losses.crossent);
-% 
-%   if isfield(params, 'loss_mult')
-%     sub_loss.loss = sub_loss.loss ...
-%       + params.loss_mult.crossent * sub_losses.crossent;
-%     d_loss_H = d_loss_H + params.loss_mult.crossent * d_crossent_H;
-%   end
-% 
-%   % Switch between different loss functions on the von mises distribution.
-%   if strcmp(params.TRAINING.VON_MISES_LOSS, 'expected_squared_error')
-%     % Computes the expected squared error in UV space.
-% 
-%     % Y_sigma is the the covariance matrix of the error. We use a scale
-%     % identity matrix (ie, isotropic error) which produces errors that are
-%     % comparable to the other measures and to RGB angular error.
-%     Y_sigma = eye(2) / 32;
-%     inv_Y_sigma = inv(Y_sigma);
-% 
-%     % This math is adopted from Section 0.5 of
-%     % http://www.cogsci.ucsd.edu/~ajyu/Teaching/Tutorials/gaussid.pdf
-%     sub_losses.vonmises = sum( ...
-%       (inv_Y_sigma * (state_obs.mu - Y)) .* (state_obs.mu - Y)) ...
-%       + trace(inv_Y_sigma * state_obs.Sigma); %#ok<MINV>
-% 
-%     d_vonmises_mu = 2 * (state_obs.mu - Y);
-%     d_vonmises_Sigma = inv_Y_sigma;
-% 
-%   elseif strcmp(params.TRAINING.VON_MISES_LOSS, 'squared_error')
-%     % Computes the squared error in UV space.
-%     sub_losses.vonmises = sum((state_obs.mu - Y).^2);
-%     d_vonmises_mu = 2 * (state_obs.mu - Y);
-%     d_vonmises_Sigma = zeros(2, 2);
-% 
-%   elseif strcmp(params.TRAINING.VON_MISES_LOSS, 'likelihood')
-% 
-%     % Compute the log-likelihood of x. Here we treat the bivariate Von Mises
-%     % distribution in state_obs as a simple multivariate normal, essentially
-%     % un-wrapping the point from a torus to the least-wrapped Cartesian plane.
-%     [sub_losses.vonmises, ~, d_vonmises_mu, d_vonmises_Sigma] = ...
-%       LLMultivariateNormal(Y, state_obs.mu, state_obs.Sigma);
-% 
-%     % Flipping the sign to turn log-likelihoods into losses.
-%     sub_losses.vonmises = -sub_losses.vonmises;
-%     d_vonmises_mu = -d_vonmises_mu;
-%     d_vonmises_Sigma = -d_vonmises_Sigma;
-% 
-%     % Because the Von Mises log-likelihood is computed using covariance matrices
-%     % which have had a non-zero constant added to the diagonal, we can bound the
-%     % log-likelihood and use this to shift the loss/log-likelihood such that it
-%     % is non-negative, which makes optimization easier to reason about.
-%     % Equivalent to:
-%     %   vonmises_loss_min = -LLMultivariateNormal( ...
-%     %     [0; 0], [0; 0], ...
-%     %     eye(2) * (params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS * ...
-%     %     params.HISTOGRAM.BIN_SIZE.^2));
-%     vonmises_loss_min = log(2 * pi * ...
-%       params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS * params.HISTOGRAM.BIN_SIZE^2);
-% 
-%     sub_losses.vonmises = sub_losses.vonmises - vonmises_loss_min;
-%   else
-%     assert(false)
-%   end
-% 
-%   assert(sub_losses.vonmises >= -1e-4);
-%   sub_losses.vonmises = max(0, sub_losses.vonmises);
-% 
-%   % Backprop the gradient from the Von Mises onto the PDF.
-%   if params.TRAINING.FORCE_ISOTROPIC_VON_MISES
-%     d_var = 0.5 * (d_vonmises_Sigma(1,1) + d_vonmises_Sigma(2,2));
-%     d_vonmises_P = ...
-%       bsxfun(@plus, d_var * dSigma_P{1} + d_vonmises_mu(1) * dmu_P{1}, ...
-%                     d_var * dSigma_P{3} + d_vonmises_mu(2) * dmu_P{2});
-%   else
-%   % The partial derivatives in dSigma_P have varied sizes so we add them in
-%   % the most efficient order.
-%     d_vonmises_P = bsxfun(@plus, bsxfun(@plus, ...
-%       (2 * d_vonmises_Sigma(1,2)) * dSigma_P{2}, ...
-%       (d_vonmises_mu(1) * dmu_P{1} + d_vonmises_Sigma(1,1) * dSigma_P{1})), ...
-%       (d_vonmises_mu(2) * dmu_P{2} + d_vonmises_Sigma(2,2) * dSigma_P{3}));
-%   end
-% 
-%   % Backprop the gradient from the PDF to H.
-%   d_vonmises_H = SoftmaxBackward(d_vonmises_P, P_meta);
-% 
-%   power_loss = ...
-%     isfield(params.TRAINING, 'VONMISES_POWER') ...
-%     && (params.TRAINING.VONMISES_POWER ~= 1);
-% 
-%   if power_loss
-%     assert(params.TRAINING.VONMISES_POWER ~= 0);
-%     [sub_losses.vonmises, d_vonmises_H] = ...
-%       ApplyPower(params.TRAINING.VONMISES_POWER, ...
-%         sub_losses.vonmises, d_vonmises_H);
-%   end
-% 
-%   if isfield(params, 'loss_mult')
-%     sub_loss.loss = sub_loss.loss ...
-%       + params.loss_mult.vonmises * sub_losses.vonmises;
-%     d_loss_H = d_loss_H + params.loss_mult.vonmises * d_vonmises_H;
-%   end
-% 
-%   if isfield(params, 'loss_mult')
-%     sub_loss.d_loss_F_fft =  ...
-%       bsxfun(@times, conj(X_fft), fft2((1 / size(F_fft,1)^2) * d_loss_H));
-%     if params.TRAINING.LEARN_BIAS
-%       sub_loss.d_loss_B = d_loss_H;
-%     end
-%   end
-% end
-% 
-% if nargout >= 5
-%   if (params.RUNTIME.FRAMES_PER_SECOND > 0) ...
-%       && ~isinf(params.RUNTIME.KALMAN_NOISE_VARIANCE)
-%     % The motion of the white point over time is assumed to be zero-mean
-%     % Gaussian noise with an isotropic covariance matrix, whose diagonal
-%     % elements are some assumed variance constant divided by the frame rate.
-%     Sigma_noise = (params.RUNTIME.KALMAN_NOISE_VARIANCE ...
-%       / params.RUNTIME.FRAMES_PER_SECOND) * eye(2);
-% 
-%     % Update the current state's estimate of mu and Sigma using the observed
-%     % mu and Sigma and the assumed transition model.
-%     state_next = KalmanUpdate(state_obs, state_last, Sigma_noise);
-%   else
-%     % If we're ignoring temporal smoothness, then just set the state to be
-%     % equal to the observation.
-%     state_next = state_obs;
-%   end
+if params.DEBUG.GRAY_WORLD_UNWRAPPING
+  avg_uv = RgbToUv(avg_rgb);
+  deltas = state_obs.mu - avg_uv;
+  width = params.HISTOGRAM.NUM_BINS * params.HISTOGRAM.BIN_SIZE;
+  state_obs.mu = state_obs.mu - width * round(deltas / width);
+end
+
+if compute_gradient
+  dmu_P = cellfun(@(x) x * params.HISTOGRAM.BIN_SIZE, dmu_idx_P, ...
+    'UniformOutput', false);
+  dSigma_P = cellfun(@(x) x * params.HISTOGRAM.BIN_SIZE.^2, dSigma_idx_P, ...
+    'UniformOutput', false);
+end
+
+if strcmp(params.HISTOGRAM.VON_MISES_DIAGONAL_MODE, 'clamp');
+  % If the gradient has been clamped, then the derivative with respect to Sigma
+  % should be set to zero.
+  if (sigma_clamped)
+    dSigma_P{1} = 0;
+    dSigma_P{2} = 0;
+    dSigma_P{3} = 0;
+  end
+end
+
+meta.P = P;
+
+% The entropy of the Von Mises PDF.
+meta.entropy = 0.5 * log(det(state_obs.Sigma));
+
+% Because Sigma has a scaled identity matrix added to it, we can derive a lower
+% bound on entropy.
+meta.minimum_entropy = ...
+      0.5 * log(det(params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS ...
+      * (params.HISTOGRAM.BIN_SIZE.^2) * eye(2)));
+
+% This is a reasonable "confidence" measurement, in that it is a value in (0, 1]
+% where a large value means that the model predicted a very tightly localized
+% white point. Equivalent to:
+%   confidence = exp(-entropy) / exp(-minimum_entropy).
+meta.entropy_confidence = exp(meta.minimum_entropy - meta.entropy);
+
+sub_loss = struct();
+sub_losses = struct();
+if isfield(params, 'loss_mult')
+  sub_loss.loss = 0;
+  d_loss_H = 0;
+end
+
+if ~isempty(Y)
+  % Here we compute two losses: a convex loss (cross-entropy on a discrete label
+  % set, useful for pre-training) and a non-convex loss that produces higher
+  % quality results when/if a good minimum is found (Von Mises log-likelihood,
+  % useful for fine-tuning).
+
+  % This convex loss is just logistic regression between P and a ground-truth
+  % PDF indicating the location of the white point.
+
+  if params.TRAINING.SMOOTH_CROSS_ENTROPY
+    % Construct a one-hot vector from the ground truth.
+    Y_idx = UvToIdx(Y, params);
+    P_true = sparse(Y_idx(1), Y_idx(2), true, size(H,1), size(H,2));
+  else
+    % Construct a PDF from the ground truth.
+    P_true = UvToP(Y, params);
+  end
+
+  % Compute cross-entropy (aka log-loss) and its gradient.
+  log_P = P_meta.H_shifted - log(P_meta.expH_sum);
+  sub_losses.crossent = -full(sum(P_true(:) .* log_P(:)));
+  d_crossent_H = P - P_true;
+
+  assert(sub_losses.crossent >= -1e-4);
+  sub_losses.crossent = max(0, sub_losses.crossent);
+
+  if isfield(params, 'loss_mult')
+    sub_loss.loss = sub_loss.loss ...
+      + params.loss_mult.crossent * sub_losses.crossent;
+    d_loss_H = d_loss_H + params.loss_mult.crossent * d_crossent_H;
+  end
+
+  % Switch between different loss functions on the von mises distribution.
+  if strcmp(params.TRAINING.VON_MISES_LOSS, 'expected_squared_error')
+    % Computes the expected squared error in UV space.
+
+    % Y_sigma is the the covariance matrix of the error. We use a scale
+    % identity matrix (ie, isotropic error) which produces errors that are
+    % comparable to the other measures and to RGB angular error.
+    Y_sigma = eye(2) / 32;
+    inv_Y_sigma = inv(Y_sigma);
+
+    % This math is adopted from Section 0.5 of
+    % http://www.cogsci.ucsd.edu/~ajyu/Teaching/Tutorials/gaussid.pdf
+    sub_losses.vonmises = sum( ...
+      (inv_Y_sigma * (state_obs.mu - Y)) .* (state_obs.mu - Y)) ...
+      + trace(inv_Y_sigma * state_obs.Sigma); %#ok<MINV>
+
+    d_vonmises_mu = 2 * (state_obs.mu - Y);
+    d_vonmises_Sigma = inv_Y_sigma;
+
+  elseif strcmp(params.TRAINING.VON_MISES_LOSS, 'squared_error')
+    % Computes the squared error in UV space.
+    sub_losses.vonmises = sum((state_obs.mu - Y).^2);
+    d_vonmises_mu = 2 * (state_obs.mu - Y);
+    d_vonmises_Sigma = zeros(2, 2);
+
+  elseif strcmp(params.TRAINING.VON_MISES_LOSS, 'likelihood')
+
+    % Compute the log-likelihood of x. Here we treat the bivariate Von Mises
+    % distribution in state_obs as a simple multivariate normal, essentially
+    % un-wrapping the point from a torus to the least-wrapped Cartesian plane.
+    [sub_losses.vonmises, ~, d_vonmises_mu, d_vonmises_Sigma] = ...
+      LLMultivariateNormal(Y, state_obs.mu, state_obs.Sigma);
+
+    % Flipping the sign to turn log-likelihoods into losses.
+    sub_losses.vonmises = -sub_losses.vonmises;
+    d_vonmises_mu = -d_vonmises_mu;
+    d_vonmises_Sigma = -d_vonmises_Sigma;
+
+    % Because the Von Mises log-likelihood is computed using covariance matrices
+    % which have had a non-zero constant added to the diagonal, we can bound the
+    % log-likelihood and use this to shift the loss/log-likelihood such that it
+    % is non-negative, which makes optimization easier to reason about.
+    % Equivalent to:
+    %   vonmises_loss_min = -LLMultivariateNormal( ...
+    %     [0; 0], [0; 0], ...
+    %     eye(2) * (params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS * ...
+    %     params.HISTOGRAM.BIN_SIZE.^2));
+    vonmises_loss_min = log(2 * pi * ...
+      params.HYPERPARAMS.VON_MISES_DIAGONAL_EPS * params.HISTOGRAM.BIN_SIZE^2);
+
+    sub_losses.vonmises = sub_losses.vonmises - vonmises_loss_min;
+  else
+    assert(false)
+  end
+
+  assert(sub_losses.vonmises >= -1e-4);
+  sub_losses.vonmises = max(0, sub_losses.vonmises);
+
+  % Backprop the gradient from the Von Mises onto the PDF.
+  if params.TRAINING.FORCE_ISOTROPIC_VON_MISES
+    d_var = 0.5 * (d_vonmises_Sigma(1,1) + d_vonmises_Sigma(2,2));
+    d_vonmises_P = ...
+      bsxfun(@plus, d_var * dSigma_P{1} + d_vonmises_mu(1) * dmu_P{1}, ...
+                    d_var * dSigma_P{3} + d_vonmises_mu(2) * dmu_P{2});
+  else
+  % The partial derivatives in dSigma_P have varied sizes so we add them in
+  % the most efficient order.
+    d_vonmises_P = bsxfun(@plus, bsxfun(@plus, ...
+      (2 * d_vonmises_Sigma(1,2)) * dSigma_P{2}, ...
+      (d_vonmises_mu(1) * dmu_P{1} + d_vonmises_Sigma(1,1) * dSigma_P{1})), ...
+      (d_vonmises_mu(2) * dmu_P{2} + d_vonmises_Sigma(2,2) * dSigma_P{3}));
+  end
+
+  % Backprop the gradient from the PDF to H.
+  d_vonmises_H = SoftmaxBackward(d_vonmises_P, P_meta);
+
+  power_loss = ...
+    isfield(params.TRAINING, 'VONMISES_POWER') ...
+    && (params.TRAINING.VONMISES_POWER ~= 1);
+
+  if power_loss
+    assert(params.TRAINING.VONMISES_POWER ~= 0);
+    [sub_losses.vonmises, d_vonmises_H] = ...
+      ApplyPower(params.TRAINING.VONMISES_POWER, ...
+        sub_losses.vonmises, d_vonmises_H);
+  end
+
+  if isfield(params, 'loss_mult')
+    sub_loss.loss = sub_loss.loss ...
+      + params.loss_mult.vonmises * sub_losses.vonmises;
+    d_loss_H = d_loss_H + params.loss_mult.vonmises * d_vonmises_H;
+  end
+
+  if isfield(params, 'loss_mult')
+    sub_loss.d_loss_F_fft =  ...
+      bsxfun(@times, conj(X_fft), fft2((1 / size(F_fft,1)^2) * d_loss_H));
+    if params.TRAINING.LEARN_BIAS
+      sub_loss.d_loss_B = d_loss_H;
+    end
+  end
+end
+
+if nargout >= 5
+  if (params.RUNTIME.FRAMES_PER_SECOND > 0) ...
+      && ~isinf(params.RUNTIME.KALMAN_NOISE_VARIANCE)
+    % The motion of the white point over time is assumed to be zero-mean
+    % Gaussian noise with an isotropic covariance matrix, whose diagonal
+    % elements are some assumed variance constant divided by the frame rate.
+    Sigma_noise = (params.RUNTIME.KALMAN_NOISE_VARIANCE ...
+      / params.RUNTIME.FRAMES_PER_SECOND) * eye(2);
+
+    % Update the current state's estimate of mu and Sigma using the observed
+    % mu and Sigma and the assumed transition model.
+    state_next = KalmanUpdate(state_obs, state_last, Sigma_noise);
+  else
+    % If we're ignoring temporal smoothness, then just set the state to be
+    % equal to the observation.
+    state_next = state_obs;
+  end
 end

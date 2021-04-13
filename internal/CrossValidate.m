@@ -70,10 +70,7 @@ if ~isempty(output_folder)
 end
 
 % Train N_FOLDS models using cross-validation.
-% [models, train_metadata, params_trained] = TrainModel(data, params);
-
-% load('workspace.mat', 'models', 'train_metadata', 'params_trained')
-load('workspace.mat')
+[models, train_metadata, params_trained] = TrainModel(data, params);
 
 % Evaluate the error of each datapoint using the cross-validation model for
 % which that datapoint is in the test-set.
@@ -122,7 +119,8 @@ for i_data = 1:length(data)
   else
     % Using the non-convex loss causes EvaluateModel to produce Von Mises
     % negative log-likelihoods, which is what we are trying to measure here.
-    [state_obs] = EvaluateModel(model.F_fft, model.B, X, fft2(X), Y, [], avg_rgb, params);
+    [state_obs, metadata, ~, losses] = EvaluateModel( ...
+      model.F_fft, model.B, X, fft2(X), Y, [], avg_rgb, params);
 
     if ~params.TRAINING.TIMES_ARE_INVALID
       % Run the subset of the evaluation code just necesssary for white point
@@ -134,24 +132,17 @@ for i_data = 1:length(data)
     end
   end
 
-%   nlls(i_data) = losses.vonmises;
+  nlls(i_data) = losses.vonmises;
 
   % Compute the angle between the estimated illuminant and the true illuminant.
   uv_est = state_obs.mu;
   uv_true = Y;
 
-  rgb_est = UvToRgb(uv_est);
-  rgb_outputs(:, i_data) = rgb_est;
+  rgb_outputs(:, i_data) = UvToRgb(uv_est);
   rgb_gts(:, i_data) = UvToRgb(uv_true);
   rgb_err = (180 / pi) * acos(max(0, min(1, ...
     sum(rgb_outputs(:, i_data) .* rgb_gts(:, i_data)))));
   rgb_errs(i_data) = rgb_err;
-  [~,filename,~] = fileparts(data(i_data).filename);
-  disp(['{ ', '"', filename, '", { ',    ...
-      num2str(rgb_est(1), 8), ', '      ...
-      num2str(rgb_est(2), 8), ', '      ...
-      num2str(rgb_est(3), 8), ' } },'   ...
-      ]);
 
   uv_errs(:, i_data) = (uv_est - uv_true) / params.HISTOGRAM.BIN_SIZE;
 
@@ -265,64 +256,64 @@ for i_data = 1:length(data)
       imwrite(P_bvm, fullfile(output_folder, ...
         [num2str(i_data, '%08d'), '_chroma.png']));
 
-%       P = single(metadata.P);
-%       save(fullfile(output_folder, [num2str(i_data, '%08d'), '_P.mat']), 'P');
+      P = single(metadata.P);
+      save(fullfile(output_folder, [num2str(i_data, '%08d'), '_P.mat']), 'P');
 
       fid = fopen( ...
         fullfile(output_folder, [num2str(i_data, '%08d'), '_error.txt']), 'w');
       fprintf(fid, '%f', rgb_err);
       fclose(fid);
 
-%       fid = fopen(fullfile( ...
-%         output_folder, [num2str(i_data, '%08d'), '_confidence.txt']), 'w');
-%       fprintf(fid, '%f', metadata.entropy_confidence);
-%       fclose(fid);
+      fid = fopen(fullfile( ...
+        output_folder, [num2str(i_data, '%08d'), '_confidence.txt']), 'w');
+      fprintf(fid, '%f', metadata.entropy_confidence);
+      fclose(fid);
     end
   end
 end
 
-% % If a filename is specified, dump the estimated RGB values to it, where each
-% % image is reported as:
-% % filename R G B
-% if ~isempty(params.DEBUG.OUTPUT_SUMMARY)
-%   fid = fopen(params.DEBUG.OUTPUT_SUMMARY, 'w');
-%   for i_data = 1:length(data)
-%     filename = data(i_data).original_filename;
-%     filename = filename((1+find(filename == '/', 1, 'last')):end);
-%     fprintf(fid, '%s', filename);
-%     fprintf(fid, ' %f', rgb_outputs(:,i_data)');
-%     fprintf(fid, '\n');
-%   end
-%   fclose(fid);
-% end
-% 
-% assert(~any(isnan(rgb_errs(:))));
-% assert(~any(isnan(uv_errs(:))));
-% assert(~any(isnan(is_training(:))));
-% assert(~any(isnan(nlls(:))));
-% 
-% is_test = ~is_training;
-% 
-% % Compute the surface statistics for each error measure.
-% metrics.rgb_err = ErrorMetrics(rgb_errs(is_test));
-% metrics.uv_err = ErrorMetrics(sqrt(sum(uv_errs(:,is_test).^2,1)));
-% metrics.vonmises_nll = ErrorMetrics(nlls(is_test));
-% metrics.uv_bin_bias = mean(uv_errs(:, is_test),2)';
-% 
-% if any(is_training)
-%   metrics.training_rgb_err = ErrorMetrics(rgb_errs(is_training));
-%   metrics.training_uv_err = ...
-%     ErrorMetrics(sqrt(sum(uv_errs(:,is_training).^2,1)));
-%   metrics.training_vonmises_nll = ErrorMetrics(nlls(is_training));
-%   metrics.training_uv_bin_bias = mean(uv_errs(:, is_training),2)';
-% end
-% 
-% feature_times = cat(1, data.feature_time);
-% metrics.final_losses = train_metadata.final_losses;
-% metrics.train_times = train_metadata.train_times ...
-%   + sum(feature_times) / length(train_metadata.train_times);
-% metrics.min_feature_time = min(feature_times);
-% metrics.min_filter_time = min(filter_times);
-% metrics.median_feature_time = median(feature_times);
-% metrics.median_filter_time = median(filter_times);
-% metrics.opt_traces = train_metadata.opt_traces;
+% If a filename is specified, dump the estimated RGB values to it, where each
+% image is reported as:
+% filename R G B
+if ~isempty(params.DEBUG.OUTPUT_SUMMARY)
+  fid = fopen(params.DEBUG.OUTPUT_SUMMARY, 'w');
+  for i_data = 1:length(data)
+    filename = data(i_data).original_filename;
+    filename = filename((1+find(filename == '/', 1, 'last')):end);
+    fprintf(fid, '%s', filename);
+    fprintf(fid, ' %f', rgb_outputs(:,i_data)');
+    fprintf(fid, '\n');
+  end
+  fclose(fid);
+end
+
+assert(~any(isnan(rgb_errs(:))));
+assert(~any(isnan(uv_errs(:))));
+assert(~any(isnan(is_training(:))));
+assert(~any(isnan(nlls(:))));
+
+is_test = ~is_training;
+
+% Compute the surface statistics for each error measure.
+metrics.rgb_err = ErrorMetrics(rgb_errs(is_test));
+metrics.uv_err = ErrorMetrics(sqrt(sum(uv_errs(:,is_test).^2,1)));
+metrics.vonmises_nll = ErrorMetrics(nlls(is_test));
+metrics.uv_bin_bias = mean(uv_errs(:, is_test),2)';
+
+if any(is_training)
+  metrics.training_rgb_err = ErrorMetrics(rgb_errs(is_training));
+  metrics.training_uv_err = ...
+    ErrorMetrics(sqrt(sum(uv_errs(:,is_training).^2,1)));
+  metrics.training_vonmises_nll = ErrorMetrics(nlls(is_training));
+  metrics.training_uv_bin_bias = mean(uv_errs(:, is_training),2)';
+end
+
+feature_times = cat(1, data.feature_time);
+metrics.final_losses = train_metadata.final_losses;
+metrics.train_times = train_metadata.train_times ...
+  + sum(feature_times) / length(train_metadata.train_times);
+metrics.min_feature_time = min(feature_times);
+metrics.min_filter_time = min(filter_times);
+metrics.median_feature_time = median(feature_times);
+metrics.median_filter_time = median(filter_times);
+metrics.opt_traces = train_metadata.opt_traces;
